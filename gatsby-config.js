@@ -45,6 +45,10 @@ module.exports = {
           {
             name: `GitHub`,
             url: `https://github.com/sev7e0`,
+          },
+          {
+            name: `Twitter`,
+            url: `https://twitter.com/li_jiaq`,
           }
         ],
       },
