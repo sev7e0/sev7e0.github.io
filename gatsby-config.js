@@ -64,7 +64,7 @@ module.exports = {
       resolve: `gatsby-plugin-manifest`,
       options: {
         name: `Sev7e0's Blog - Xiao Li`,
-        short_name: `Sev7e0's Blogi`,
+        short_name: `Sev7e0's Blog`,
         description: `Typography driven, feature-rich blogging theme with minimal aesthetics. Includes tags/categories support and extensive features for code blocks such as live preview, line numbers, and code highlighting.`,
         start_url: `/`,
         background_color: `#fff`,
