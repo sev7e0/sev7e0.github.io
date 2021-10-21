@@ -40,6 +40,10 @@ module.exports = {
             title: `Books`,
             slug: `/books`,
           },
+          {
+            title: `OneLang`,
+            slug: `/onelang`,
+          }
         ],
         externalLinks: [
           {
