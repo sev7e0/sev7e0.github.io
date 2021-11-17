@@ -1689,10 +1689,10 @@
     "prop-types" "^15.6.1"
     "react-lifecycles-compat" "^3.0.4"
 
-"@sev7e0/gatsby-theme-minimal-blog-customize@^3.0.0":
-  "integrity" "sha512-lKaGze7pFPoyfvA5y0YEPkSr4/A/z6jh08qIdnQYu8ZcNqJtq1pYQ+o9PZcj4MDaUE9K5VpgOuNpu/ESzb1COA=="
-  "resolved" "https://registry.npmjs.org/@sev7e0/gatsby-theme-minimal-blog-customize/-/gatsby-theme-minimal-blog-customize-3.0.0.tgz"
-  "version" "3.0.0"
+"@sev7e0/gatsby-theme-minimal-blog-customize@^3.0.1":
+  "integrity" "sha1-z8pP8nrMsKSYm2ddG18lJLxVWwI="
+  "resolved" "https://registry.nlark.com/@sev7e0/gatsby-theme-minimal-blog-customize/download/@sev7e0/gatsby-theme-minimal-blog-customize-3.0.1.tgz"
+  "version" "3.0.1"
   dependencies:
     "@lekoarts/gatsby-theme-minimal-blog-core" "^2.7.6"
     "@loadable/component" "^5.14.1"
@@ -13386,7 +13386,7 @@
   "resolved" "https://registry.npmjs.org/shallowequal/-/shallowequal-1.1.0.tgz"
   "version" "1.1.0"
 
-"sharp@^0.27.0":
+"sharp@^0.27.0", "sharp@^0.27.1":
   "integrity" "sha512-IQNXWdspb4nZcJemXa6cfgz+JvKONsuqP8Mwi1Oti23Uo7+J+UF2jihJDf6I1BQbrmhcZ0lagH/1WYG+ReAzyQ=="
   "resolved" "https://registry.npmjs.org/sharp/-/sharp-0.27.1.tgz"
   "version" "0.27.1"
