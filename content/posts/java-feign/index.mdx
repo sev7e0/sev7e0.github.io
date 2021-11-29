@@ -42,37 +42,33 @@ FeignClient 是在`spring-cloud-openfeign-core`中提供的注解，其搭配 sp
 使用方法：
 
 ```java
-@FeignClient(
-        value = "seckill-provider", path = "/api/demo/",
-        fallback = DemoDefaultFallback.class)
-public interface DemoClient {
-    /**
-     * 非常简单的一个 回显 接口，主要用于远程调用
-     *
-     * @return echo 回显消息
-     */
-    @RequestMapping(value = "/echo/{word}/v1", method = RequestMethod.GET)
-    Result<JSONObject> echo(@PathVariable(value = "word") String word);
+@FeignClient(value = "go-server", url = "localhost:8088/v1")
+public interface GoFeignServer {
+
+	/**
+	 * 调用接口
+	 * @return string
+	 */
+	@GetMapping(value = "/getInfo")
+	String getInfo();
 }
 ```
 
 上边接口在服务启动时就会通过动态代理创建一个代理对象，并将该对象注入到 spring 容器中，使用时即可直接在类中注入即可
 
+服务端代码为go项目，参考[github](https://www.github.com/sev7e0)
+
 ```java
-@RestController
-@RequestMapping("/api/user")
-public class UserController {
+@RestController("/v2")
+public class FeignClientController {
 
-    @Resource
-    DemoClient demoClient;  //装配 DemoClient 的本地代理实例
+	@Resource
+	private GoFeignServer goFeignServer;
 
-    @GetMapping("/say/hello/v1")
-    public Result<JSONObject> hello() {
-        Result<JSONObject> result = demoClient.echo("test");
-        data.put("others", result);
-        return Result.success(data).setMsg("操作成功");
-    }
-//…
+	@GetMapping("/getInfo")
+	public String getInfo(){
+		return goFeignServer.getInfo();
+	}
 }
 ```
 
