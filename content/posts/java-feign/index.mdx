@@ -1,0 +1,262 @@
+---
+title: "聊聊feign"
+date: 2021-11-23
+tags:
+  - java
+  - feign
+slug: "/java-feign"
+banner:
+description: "feign理解"
+---
+
+### feign 从哪里来？
+
+feign 最初作为一款轻量级 http 客户端，灵感来自于 JAXRS-2.0 和 WebSocket。他的目标是使客户端编码更简单，调用一个远程服务端时，通过接口 + 注解的方式发起 HTTP 请求调用，面向接口编程，而不是像 Java 中通过封装 HTTP 请求报文的方式直接调用。
+
+但被熟知及大范围使用是在 Spring Cloud 对其的集成，并且 Spring Cloud 整合了 Ribbon 和 Eureka 为使用 feign 的过程中提供了一个负载均衡的 http 客户端。
+
+### 为什么使用 feign
+
+在微服务场景中，考虑到项目异构解耦，所以在很多情况下都是基于 http 协议进行调用，但单纯的使用 http client 比如 okhttp 等，那么我们需要考虑比如性能（http1.1）、重试策略、限流、容错、负载等等各个方面。所以 feign 提出了解决方案，他基于 http client 进行封装，在内部添加各种功能，使得开发人员只需要面向接口进行编程，即可实现远程接口调用。
+
+等等提到这就可以想到一个概念`RPC`，先来看一下 rpc 的基本模型架构图，其实 feign 的作用就相当于基于 http 实现了一个 rpc。
+
+![28rN5FoUWpxGBKZ](https://i.loli.net/2021/11/25/28rN5FoUWpxGBKZ.png)
+
+从上图可以看到，Feign 通过处理注解，将请求模板化，当实际调用的时候，传入参数，根据参数再应用到请求上，进而转化成真正的 Request 请求。通过 Feign 以及 JAVA 的动态代理机制，使得 Java 开发人员，可以不用通过 HTTP 框架去封装 HTTP 请求报文的方式，完成远程服务的 HTTP 调用。
+
+### feign 的组成
+
+#### @FeignClient
+
+FeignClient 是在`spring-cloud-openfeign-core`中提供的注解，其搭配 spring-mvc 注解`RequestMapping`，
+能够在 spring 服务启动时 feign 回去扫描所有使用了该注解的接口，然后根据注解中的属性值，以及项目配置创建一个代理对象，
+这个对象中包含了远程接口的调用，并把这个对象注入到容器中，当接口被调用时，spring 容器返回代理对象并完成实际的调用动作。
+
+远程接口的本地 JDK Proxy 代理实例，有以下特点：
+
+1. Proxy 代理实例，实现了一个加 @FeignClient 注解的远程调用接口；
+2. Proxy 代理实例，能在内部进行 HTTP 请求的封装，以及发送 HTTP 请求；
+3. Proxy 代理实例，能处理远程 HTTP 请求的响应，并且完成结果的解码，然后返回给调用者。
+
+使用方法：
+
+```java
+@FeignClient(
+        value = "seckill-provider", path = "/api/demo/",
+        fallback = DemoDefaultFallback.class)
+public interface DemoClient {
+    /**
+     * 非常简单的一个 回显 接口，主要用于远程调用
+     *
+     * @return echo 回显消息
+     */
+    @RequestMapping(value = "/echo/{word}/v1", method = RequestMethod.GET)
+    Result<JSONObject> echo(@PathVariable(value = "word") String word);
+}
+```
+
+上边接口在服务启动时就会通过动态代理创建一个代理对象，并将该对象注入到 spring 容器中，使用时即可直接在类中注入即可
+
+```java
+@RestController
+@RequestMapping("/api/user")
+public class UserController {
+
+    @Resource
+    DemoClient demoClient;  //装配 DemoClient 的本地代理实例
+
+    @GetMapping("/say/hello/v1")
+    public Result<JSONObject> hello() {
+        Result<JSONObject> result = demoClient.echo("test");
+        data.put("others", result);
+        return Result.success(data).setMsg("操作成功");
+    }
+//…
+}
+```
+
+具体如何创建代理对象，以及在生成代理类时都做了些需要结合其他类来解读。
+
+#### InvocationHandler
+
+使用 jdk 动态代理就意味着，一定要实现反射包中的 InvocationHandler 接口，并且实现`invoke`方法。
+
+为了创建 Feign 的远程接口的代理实现类，Feign 提供了自己的一个默认的调用处理器，叫做 FeignInvocationHandler 类
+，该类处于 feign-core 核心 jar 包中。当然，调用处理器可以进行替换，如果 Feign 与 Hystrix 结合使用，
+则会替换成 HystrixInvocationHandler 调用处理器类，类处于 feign-hystrix 的 jar 包中。
+
+##### FeignInvocationHandler
+
+默认的调用处理器 FeignInvocationHandler 是一个相对简单的类，有一个非常重要 Map 类型成员 dispatch 映射，
+保存着远程接口方法到 MethodHandler 方法处理器的映射。
+
+在处理远程方法调用的时候，会根据 Java 反射的方法实例，在 dispatch 映射对象中，找到对应的 MethodHandler 方法处理器，然后交给 MethodHandler 完成实际的 HTTP 请求和结果的处理。
+
+```java
+public class ReflectiveFeign extends Feign {
+
+  //静态内部类：默认的Feign调用处理器 FeignInvocationHandler
+  static class FeignInvocationHandler implements InvocationHandler {
+
+    private final Target target;
+    //方法实例对象和方法处理器的映射
+    private final Map<Method, MethodHandler> dispatch;
+
+    //构造函数
+    FeignInvocationHandler(Target target, Map<Method, MethodHandler> dispatch) {
+      this.target = checkNotNull(target, "target");
+      this.dispatch = checkNotNull(dispatch, "dispatch for %s", target);
+    }
+
+    //默认Feign调用的处理
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        //...
+        //首先，根据方法实例，从方法实例对象和方法处理器的映射中，
+        //取得 方法处理器，然后，调用 方法处理器 的 invoke(...) 方法
+        return dispatch.get(method).invoke(args);
+    }
+    //...
+  }
+```
+
+源码很简单，重点在于 invoke(…)方法，虽然核心代码只有一行，但是其功能是复杂的：
+
+1. 根据 Java 反射的方法实例，在 dispatch 映射对象中，找到对应的 MethodHandler 方法处理器；
+2. 调用 MethodHandler 方法处理器的 invoke(...) 方法，完成实际的 HTTP 请求和结果的处理。
+
+补充说明一下：MethodHandler 方法处理器，和 JDK 动态代理机制中位于 java.lang.reflect 包的 InvocationHandler
+调用处理器接口，没有任何的继承和实现关系。MethodHandler 仅仅是 Feign 自定义的，一个非常简单接口。
+
+#### MethodHandler
+
+Feign 的方法处理器 MethodHandler 是一个独立的接口，定义在 InvocationHandlerFactory 接口中，仅仅拥有一个 invoke(…)方法，源码如下：
+
+```java
+    //定义在 InvocationHandlerFactory 接口中
+    public interface InvocationHandlerFactory {
+        //…
+        //方法处理器接口，仅仅拥有一个 invoke(…)方法
+        interface MethodHandler {
+            //完成远程 URL 请求
+            Object invoke(Object[] argv) throws Throwable;
+        }
+        //...
+    }
+```
+
+MethodHandler 的 invoke(…)方法，主要职责是完成实际远程 URL 请求，然后返回解码后的远程 URL 的响应结果。Feign 提供了默认的
+SynchronousMethodHandler 实现类，提供了基本的远程 URL 的同步请求处理。
+
+SynchronousMethodHandler 方法处理器的源码，大致如下：
+
+```java
+package feign;
+//…..省略import
+final class SynchronousMethodHandler implements MethodHandler {
+  //…
+  // 执行Handler 的处理
+    public Object invoke(Object[] argv) throws Throwable {
+            RequestTemplate requestTemplate = this.buildTemplateFromArgs.create(argv);
+            Retryer retryer = this.retryer.clone();
+
+            while(true) {
+                try {
+                    return this.executeAndDecode(requestTemplate);
+                } catch (RetryableException var5) {
+                //…省略不相干代码
+                }
+            }
+    }
+
+    //执行请求，然后解码结果
+    Object executeAndDecode(RequestTemplate template) throws Throwable {
+            Request request = this.targetRequest(template);
+            long start = System.nanoTime();
+            Response response;
+            try {
+                response = this.client.execute(request, this.options);
+                response.toBuilder().request(request).build();
+            }
+    }
+    }
+```
+
+SynchronousMethodHandler 的 invoke(…)方法，调用了自己的 executeAndDecode(…) 请求执行和结果解码方法。该方法的工作步骤：
+
+1. 首先通 RequestTemplate 请求模板实例，生成远程 URL 请求实例 request；
+2. 然后用自己的 feign 客户端 feign.Client 成员，excecute(…) 执行请求，并且获取 response 响应；
+3. 对 response 响应进行结果解码。
+
+#### feign.Client
+
+client 是 feign 中的最基础的组件，他是实际 http 调用的执行者，主要功能就是将请求发出并处理返回结果，
+当然该接口提供了多种实现，你可以基于不同的 http-client 去执行调用操作。
+
+1. Client.Default 类：默认的 feign.Client 客户端实现类，内部使用 HttpURLConnnection 完成 URL 请求处理；
+2. ApacheHttpClient 类：内部使用 Apache httpclient 开源组件完成 URL 请求处理的 feign.Client 客户端实现类；
+3. OkHttpClient 类：内部使用 OkHttp3 开源组件完成 URL 请求处理的 feign.Client 客户端实现类。
+4. LoadBalancerFeignClient 类：内部使用 Ribbon 负载均衡技术完成 URL 请求处理的 feign.Client 客户端实现类。
+
+也可以基于 Client 接口使用自己的 http-client 进行定制化。
+
+着重分析一下`LoadBalancerFeignClient`，其内部使用了 Ribbon 客户端负载均衡技术完成 URL 请求处理。
+在原理上，简单的使用了 delegate 包装代理模式：Ribbon 负载均衡组件计算出合适的服务端 server 之后，由内部包装 delegate 代理客户端
+完成到服务端 server 的 HTTP 请求；所封装的 delegate 客户端代理实例的类型，可以是 Client.Default 默认客户端，也可以是
+ApacheHttpClient 客户端类或 OkHttpClient 高性能客户端类，还可以其他的定制的 feign.Client 客户端实现类型。
+
+### 整体流程
+
+整体的远程调用执行流程，大致分为 4 步，具体如下：
+
+#### 通过 Spring IOC 容器实例，装配代理实例，然后进行远程调用。
+
+前文讲到，spring 项目在启动时，会为加上了@FeignClient 注解的所有远程
+接口（包括 DemoClient 接口），创建一个本地 JDK Proxy 代理实例，并注
+册到 Spring IOC 容器。在这里，暂且将这个 Proxy 代理实例，叫做 
+DemoClientProxy，稍后，会详细介绍这个 Proxy 代理实例的具体创建过程。
+然后，在本实例的 UserController 调用代码中，通过@Resource 注解，按
+照类型或者名称进行匹配（这里的类型为 DemoClient 接口类型），从 Spring IOC 
+容器找到这个代理实例，并且装配给@Resource 注解所在的成员变量，本实例的
+成员变量的名称为 demoClient。
+
+在需要代进行 hello（）远程调用时，直接通过 demoClient 成员变量，调用 
+JDK Proxy 动态代理实例的 hello（）方法。
+
+#### 执行 InvokeHandler 调用处理器的 invoke(…)方法
+
+JDK Proxy 动态代理实例的真正的方法调用过程，具体是通过 InvokeHandler 
+调用处理器完成的。故，这里的 DemoClientProxy 代理实例，会调用到默认的 
+FeignInvocationHandler 调用处理器实例的 invoke(…)方法。
+
+通过前面 FeignInvocationHandler 调用处理器的详细介绍，已经知道，默认
+的调用处理器 FeignInvocationHandle，内部保持了一个远程调用方法实例和
+方法处理器的一个 Key-Value 键值对 Map 映射。FeignInvocationHandle 
+在其 invoke(…)方法中，会根据 Java 反射的方法实例，在 dispatch 映射对
+象中，找到对应的 MethodHandler 方法处理器，然后由后者完成实际的 HTTP 
+请求和结果的处理。
+
+所以在第 2 步中，FeignInvocationHandle 会从自己的 dispatch 映射中，
+找到 hello()方法所对应的 MethodHandler 方法处理器，然后调用其 invoke
+(…)方法。
+
+#### 执行 MethodHandler 方法处理器的 invoke(…)方法
+
+通过前面关于 MethodHandler 方法处理器的非常详细的组件介绍，大家都知道，
+feign 默认的方法处理器为 SynchronousMethodHandler，其 invoke(…)
+方法主要是通过内部成员 feign 客户端成员 client，完成远程 URL 请求执
+行和获取远程结果。
+
+feign.Client 客户端有多种类型，不同的类型，完成 URL 请求处理的具体方
+式不同。
+
+#### 通过 feign.Client 客户端成员，完成远程 URL 请求执行和获取远程结果
+
+如果 MethodHandler 方法处理器实例中的 client 客户端，是默认的 
+feign.Client.Default 实现类性，则使用 JDK 自带的 HttpURLConnnection
+ 类，完成远程 URL 请求执行和获取远程结果。
+
+如果 MethodHandler 方法处理器实例中的 client 客户端，是 ApacheHttpClient 
+客户端实现类性，则使用 Apache httpclient 开源组件，完成远程 URL 请求执行和
+获取远程结果。
