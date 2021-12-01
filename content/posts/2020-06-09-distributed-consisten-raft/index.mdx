@@ -1,0 +1,164 @@
+---
+title: 分布式协议：Raft
+date: 2020-06-09 15:55:42
+tags: 
+- distributed
+---
+
+## 提出问题
+
+前一篇记录了在分布式系统中大名鼎鼎的paxos算法，说实话拜读了很多资料和博客，最后总结出来的笔记还是不太理想，一是其过于深奥的理论，二是其并没有在哪一个系统中被完美的实现，更多的是理论上的完美。
+
+学习分布式一致性算法，首先应该先要了解2PC、3PC、接下来是paxos，哪怕没有真正的理解paxos精髓。但其在分布式一致性问题中的重要地位还是需要尊重一下的。说过了`paxos`接下来就是就需要说说raft算法，在`paxos`中分为`basic-paxos`和`multi-paxos`，我们知道其不易懂难实现，所以`raft`基于`multi-paxos`进行了简化，同时保留了`paxos`的可用、可靠的优点。
+
+## 算法内容
+
+raft算法的主要目标就是相对于`paxos`要易于理解和实现，这从它论文的名字就可以看出来[In Search of an Understandable Consensus Algorithm](https://raft.github.io/raft.pdf)。是的，raft以此为主要目的进行了一些列工作，可以主要分为以下两个方面：
+
+- 问题拆分，逐个解决
+- 简化状态，使算法简单异动
+
+问题拆分主要就是针对节点一致性这个复杂的问题进行拆分成子问题，如leader选举、日志操作、节点状态同步等。简化状态，说白了就是对算法进行一定的限制，使其状态更可控，不需要考虑更多的不确定性，raft在paxos的基础上主要做了两个限制，首先raft 追加日志必是串行的，不允许并发写入，保证了节点内部的有序性。另一个就是对leader选举并不是每一个节点都能成为leader，只有其在当前范围内拥有比投票节点更多的日志信息，才会被投票。
+
+### 概述
+
+在raft集群中，一般包含五个服务器，这样能使其容忍两个节点出现故障。在这些节点中通常包括了三个状态，*leader*、*follower*和*candidate*，一般情况下，集群中存在一个leader，其他的都为follower。
+
+通常情况下follower都是被动的，他只会响应从leader和candidate发出的请求。而leader负责处理所有客户端的请求，即使有请求发送到了follower，其也会将请求转发至leader。candidate可以被理解为一种中间状态，启动时所有节点都是follower状态，一段时间没有收到leader心跳，那么follower就会切换状态至candidate，发起选举。一个candidate如果收到了过半数的投票，那么他将会被选举为集群的leader，这个leader会一直工作到其发生异常下线产生下一次选举。
+
+<img src="https://i.loli.net/2020/06/17/cRVizTr9E5jgPBe.png" alt="image-20200617225430087" style="zoom:50%;" />
+
+这里还需要介绍一个新的概念**Term**，如何理解呢？这里以选举总统为例，每一个总统被选出来时都会被称为XX届总统，leader在集群中的概念就相当总统，而总统的任期就是我们要理解的**Term**，每次新选举leader，term都会增加一次，哪怕是选举失败term也会增加。
+
+### Leader 选举
+
+Raft通过leader和follower的心跳机制来触发选举，如上图标红所示，当发生超时，也就是follower一段时间没有收到leader发送的消息时，follower会将自己的状态切换为candidate。start election.
+
+####  选举流程
+
+1. 开始选举，follower会先将自己的term自增，之后将状态转换为candidate。
+2. 随后其发起投票，先是为自己投票，同时并行的给集群中的其他节点发送投票请求，等待恢复。
+3. 集群中其他节点在收到投票请求时会更具raft规定的**选举原则**，进行投票，也就意味着会发生几种情况：
+   - 该follower收到过半的投票，也就是该follower成为leader。
+   - 收到消息，集群中已经存在了新的leader，该次选举作废，自动切换会follower。
+   - 发生通讯异常等情况，没有收到回复消息，该次选举作废，此candidate继续发起选举。
+4. 详细说一下上一条中说到的选举原则：
+   - 每一个term期间内，只允许向一个candidate投票。
+   - candidate上说保存的信息（这其中包括term，log的position等）不能低于当前follower。
+   - 在前两条的基础之上先到先获得投票。
+
+<img src="https://i.loli.net/2020/06/20/LwD56Eg2NKm3FUd.png" alt="image-20200620213946102" style="zoom:50%;" />
+
+总结来说，当一次选举被发起时，发起的follower将面临着三种情况：
+
+- 该follower收到过半的投票，也就是该follower成为leader，选举完成，集群整体进入下一个term阶段。
+- 有follower反馈，这个该term已经选举出了leader，当前选举作废，继续作为集群种的follower。
+- 没有任何节点获得了过半数的投票，可能是通讯异常，也可能出现了平票的情况，那么集群进入等待状态，也就是等待超时，好发起下一次投票。这段时间集群是不能够对外提供服务的，为了减少这个时间，raft引入了一个*randomized election timeout*，时长大概是150~300ms，作用就是在这种情况下尽快的促成下一次选举。
+
+### 状态同步
+
+在了解raft算法是如何进行leader与follower同步的之前先了解几个在论文中提到的概念：
+
+- Log Entry：其是leader与follower通信的消息单元，内部封装了每一次客户端请求的命令，至于命令的作用，后边再详细介绍。
+
+- State Machine：状态机，在raft使用了复制状态机进行leader与follower的状态管理，简单理解就是
+
+  ```相同的初始状态+相同的输入=相同的结果```
+
+#### 请求流程
+
+1. 集群收到请求(可能是leader，也可能是follower最后都交由leader响应处理)，leader本地追加日志。
+2. 同时并发的向其他follower发送AppendEntries RPC，复制LogEntry，等待响应。
+3. 收到大多数的消息响应。
+4. leader将这个消息写入到状态机
+5. leader响应客户端请求。
+6. leader通知其他follower持久化该请求。
+
+<img src="https://i.loli.net/2020/06/20/NPOfYeaJ5xWKLId.png" alt="image-20200620214120866" style="zoom:50%;" />
+
+既然知道了整体的流程，接下来看看LogEntry在每一个节点上是如何存储的。
+
+<img src="https://i.loli.net/2020/06/18/N15Y7Cl9v2apkRf.png" alt="image-20200618234314201" style="zoom:50%;" />
+
+每一个小格子都代表一个LogEntry，一个Logs由LogEntry组成，每一个entry中包含了创建时的term和command。由图可以看出来，同一时刻每一个节点都可能含有不同的LogEntry，也就是说raft算得上是一个AP算法，不使用强一致性，而采用最终一致性。
+
+在整个请求流程中，LogEntry在leader和follower进行传递，每次在发出后只要有过半数的follower响应了，那么这条LogEntry将会永久的保存起来，不会被回滚，也不会丢失，整个过程中LogEntry将会有两种状态，commited，指的是该LogEntry已经完成到半数以上的follower复制，apply指的是节点已经将LogEntry apply到状态机，对该节点的状态产生了影响。
+
+Raft日志同步保证如下两点：
+
+- 如果不同日志中的两个条目有着相同的索引和任期号，则它们所存储的命令是相同的。
+- 如果不同日志中的两个条目有着相同的索引和任期号，则它们之前的所有条目都是完全一样的。
+
+第一条特性源于Leader在一个term内在给定的一个log index最多创建一条日志条目，同时该条目在日志中的位置也从来不会改变。
+
+第二条特性源于 AppendEntries 的一个简单的一致性检查。当发送一个 AppendEntries RPC 时，Leader会把新日志条目紧接着之前的条目的log index和term都包含在里面。如果Follower没有在它的日志中找到log index和term都相同的日志，它就会拒绝新的日志条目。
+
+一般情况下，Leader和Followers的日志保持一致，因此 AppendEntries 一致性检查通常不会失败。然而，Leader崩溃可能会导致日志不一致：旧的Leader可能没有完全复制完日志中的所有条目。
+
+<img src="https://i.loli.net/2020/06/20/5xGNFV4iecPgmWT.jpg" alt="img"  />
+
+上图阐述了一些Followers可能和新的Leader日志不同的情况。一个Follower可能会丢失掉Leader上的一些条目，也有可能包含一些Leader没有的条目，也有可能两者都会发生。丢失的或者多出来的条目可能会持续多个任期。
+
+Leader通过强制Followers复制它的日志来处理日志的不一致，Followers上的不一致的日志会被Leader的日志覆盖。
+
+Leader为了使Followers的日志同自己的一致，Leader需要找到Followers同它的日志一致的地方，然后覆盖Followers在该位置之后的条目。
+
+Leader会从后往前试，每次AppendEntries失败后尝试前一个日志条目，直到成功找到每个Follower的日志一致位点，然后向后逐条覆盖Followers在该位置之后的条目。
+
+### 安全性
+
+在raft算法的整个流程中包括leader选举、LogEntry同步，都是在分布式的机器上进行的，最典型的问题就是节点不可靠，不能够保证每一个command的准确的传递到每一个节点，也不能保证每一个节点的状态都保持一致。例如集群中一个follower下线，这段时间内leader commit了一些LogEntry，过了一会它可以被选为leader并用新的条目覆盖这些条目；因此，不同的状态机可能执行不同的命令序列。
+
+raft算法中为了保证状态机的同步，例如上边提到的问题发生，算法对leader选举添加了一些限制，这些限制条件能够保证LogEntry在leader和follower之间正确的同步，尽可能减小出现错误的概率。
+
+#### 选举限制
+
+**拥有最新的已提交的log entry的Follower才有资格成为Leader。**
+
+<img src="https://i.loli.net/2020/06/20/uOZsTEiJ2FBYN8e.png" alt="image-20200620165345958" style="zoom: 33%;" />
+
+选举限制前边也简单提到过，主要目标就是尽可能小的影响集群中已经被commit的数据。怎么理解呢？上图我们看到如果此时选举，不加限制b节点被当选，而该节点的committed entries较少，那么她在他当前的term下与其他的d进行交流时，将会基于他commited的数据，也就是说log index（3-5）之间的数据将不会存在，也就导致了一些entries丢失。
+
+为此，raft规定每一个当选leader的candidate必须要能够与半数以上的节点进行通信，而且被通信的节点会通过比较log index中的内容，只有确定了当前比自己的数据新才会投票给他，否则拒绝投票。而且规定一次term只能投票一次，这样一来就能够尽可能的保证选出来的leader能够保存更多的数据，而且是唯一的一个leader。
+
+#### 同步限制
+
+**Leader只能推进commit index来提交当前term的已经复制到大多数服务器上的日志，旧term日志的提交要等到提交当前term的日志来间接提交（log index 小于 commit index的日志被间接提交）。**
+
+之所以要这样，是因为可能会出现已提交的日志又被覆盖的情况：
+
+<img src="https://i.loli.net/2020/06/20/jkvplFE5KwZS9t6.jpg" alt="img" style="zoom:;" />
+
+在阶段a，term为2，S1是Leader，且S1写入日志（term, index）为(2, 2)，并且日志被同步写入了S2；
+
+在阶段b，S1离线，触发一次新的选主，此时S5被选为新的Leader，此时系统term为3，且写入了日志（term, index）为（3， 2）;
+
+S5尚未将日志推送到Followers就离线了，进而触发了一次新的选主，而之前离线的S1经过重新上线后被选中变成Leader，此时系统term为4，此时S1会将自己的日志同步到Followers，按照上图就是将日志（2， 2）同步到了S3，而此时由于该日志已经被同步到了多数节点（S1, S2, S3），因此，此时日志（2，2）可以被提交了。；
+
+在阶段d，S1又下线了，触发一次选主，而S5有可能被选为新的Leader（这是因为S5可以满足作为主的一切条件：1. term = 5 > 4，2. 最新的日志为（3，2），比大多数节点（如S2/S3/S4的日志都新），然后S5会将自己的日志更新到Followers，于是S2、S3中已经被提交的日志（2，2）被截断了。
+
+增加上述限制后，即使日志（2，2）已经被大多数节点（S1、S2、S3）确认了，但是它不能被提交，因为它是来自之前term（2）的日志，直到S1在当前term（4）产生的日志（4， 4）被大多数Followers确认，S1方可提交日志（4，4）这条日志，当然，根据Raft定义，（4，4）之前的所有日志也会被提交。此时即使S1再下线，重新选主时S5不可能成为Leader，因为它没有包含大多数节点已经拥有的日志（4，4）。
+
+## 总结
+
+raft为了解决paxso中的痛点，使用2PC+majority机制实现，这里只是简单的理解了raft中两个重要的步骤leader选举、日志同步。为了使算法运行过程中状态安全可控，针对两个步骤都使用了一些约束来满足需求。
+
+- 选举限制
+  - 拥有最新的已提交的log entry的Follower才有资格成为Leader。
+  - 每一个term内只能投一票
+- 同步限制
+  - 由leader发送出去的log Entry只有被大多数复制完成才能被committed。
+  - leader不会覆盖自身日志，只会以append方式写日志。
+  - leader只能推进commit index来提交当前term的已经复制到大多数服务器上的日志，旧term日志的提交要等到提交当前term的日志来间接提交（log index 小于 commit index的日志被间接提交）。
+
+看了好多篇文章，也看了原论文，整理的较乱，不过最后发现了一个神器！我也就看了两百多遍吧~[神器地址](http://thesecretlivesofdata.com/raft/)
+
+## 参考
+
+In Search of an Understandable Consensus Algorithm
+
+[一文搞懂Raft算法](https://www.cnblogs.com/xybaby/p/10124083.html)
+
+[Raft: Understandable Distributed Consensus](http://thesecretlivesofdata.com/raft)
+
+[Raft算法详解](https://zhuanlan.zhihu.com/p/32052223)

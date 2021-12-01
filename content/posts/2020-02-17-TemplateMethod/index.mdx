@@ -1,0 +1,221 @@
+---
+title: 模板方法-TemplateMethod
+date: 2020-02-17 14:55:49
+tags:
+- 设计模式
+---
+
+
+## 定义
+
+Define the skeleton of an algorithm in an operation,deferring some steps to subclasses.Template Method lets subclasses redefine certain steps of an algorithm without changing the algorithm's structure.（定义一个操作中的算法的框架，而将一些步骤延迟到子类中。使得子类可以不改变一个算法的结构即可重定义该算法的某些特定步骤。）
+
+<!-- more -->
+
+> 类型为模式
+
+## 角色
+
+### AbstractClass：抽象模板
+
+主要包含了两类方法：
+
+- 基本方法：基本方法是抽象类中的抽象方法，具体实现延迟到子类。
+- 模板方法：是抽象模板中的具体方法，包含了对基本方法的调用逻辑。
+- 钩子方法（可选）：抽象模板中的具体方法，可以被子类重写，从而限制一些功能。
+
+> 多数情况下模板方法是固定的逻辑，也就是说不允许被子类修改，所以通常使用`final`修饰。
+
+### ConcreteMethod：具体模板
+
+- 具体方法的实现，也就是将抽象模板中的基本方法进行实现。
+- 钩子方法（可选）的实现，对一些限制功能进行定制。
+
+## 类图
+
+![20190714124018770.png](http://files.sev7e0.site/images/oneblog/20190714124018770.png)
+
+## 使用场景
+
+- 多个子类有公共的方法，并且逻辑基本相同。
+- 重要、复杂的算法，可以把核心算法设计为模板方法，其他的相关细节功能则延迟到具体子类中实现。
+- 再进行代码重构时，模板方法模式是经常被用到的模式，吧相同的代码抽取到父类中实现，然后通过钩子函数约束其行为。
+
+## 优点
+
+- 封装不变部分，拓展可变部分。
+- 把认为是不变部分的算法封装到父类实现，而可变部分的则可以通过继承来继续扩展。
+- 提取公共代码，便于维护。
+- 行为由父类控制，子类实现。
+- 基本方法是由子类实现的，因此子类可以通过扩展的方式增加相应的功能，符合开闭原则。
+
+## 缺点
+
+按照我们的设计习惯，抽象类负责声明最抽象、最一般的事物属性和方法，实现类完成具体的事物属性和方法。但是模板方法模式却颠倒了，抽象类定义了部分抽象方法，由子类实现，子类执行的结果影响了父类的结果，也就是子类对父类产生了影响，这在复杂的项目中，会带来代码阅读的难度，而且也会让新手产生不适感。
+
+## 注意事项
+
+初级程序员在写程序的时候经常会问高手“父类怎么调用子类的方法”。这个问题很有普遍性，反正我是被问过好几回，那么父类是否可以调用子类的方法呢？我的回答是能，但强烈地、极度地不建议这么做，那该怎么做呢?
+
+- 把子类传递到父类的有参构造中，然后调用。
+
+- 使用反射的方式调用，你使用了反射还有谁不能调用的？！
+
+- 父类调用子类的静态方法。
+
+这三种都是父类直接调用子类的方法，好用不？好用！解决问题了吗？解决了！项目中允许使用不？不允许！我就一直没有搞懂为什么要用父类调用子类的方法。如果一定要调用子类，那为什么要继承它呢？搞不懂。其实这个问题可以换个角度去理解，父类建立框架，子类在重写了父类部分的方法后，再调用从父类继承的方法，产生不同的结果（而这正是模板方法模式）。这是不是也可以理解为父类调用了子类的方法呢？你修改了子类，影响了父类行为的结果，曲线救国的方式实现了父类依赖子类的场景，模板方法模式就是这种效果。
+
+> 源自：《设计模式之禅》第10章模板方法模式-最佳实践
+
+## 具体实现
+
+#### 苹果设备模板类
+
+```java
+abstract class AbstractComputer {
+    /**
+     * final禁止被重新定义
+     */
+    final protected void startComputer(){
+        power();
+        mainBoard();
+        cpu();
+        hardDisk();
+        if(isDisplay()){
+            display();
+        }
+    }
+
+    final public void power(){
+        System.out.println("开始供电");
+    }
+
+    /**
+     * 抽象操作必须被重新定义
+     */
+    public abstract void mainBoard();
+
+    public abstract void cpu();
+
+    public abstract void hardDisk();
+
+    public abstract void display();
+    /**
+     * hook函数可以被重新定义,默认返回 true，所有设备都开启显示
+     */
+    public boolean isDisplay(){
+        return true;
+    }
+}
+```
+
+#### MacBook 具体类
+
+```java
+
+class MacBook extends AbstractComputer{
+
+
+    @Override
+    public void mainBoard() {
+        System.out.println("MacBook启动主板");
+    }
+
+    @Override
+    public void cpu() {
+        System.out.println("MacBook开始为CPU供电");
+    }
+
+    @Override
+    public void hardDisk() {
+        System.out.println("MacBook开始为硬盘供电");
+    }
+
+    @Override
+    public void display() {
+        System.out.println("MacBook屏幕点亮");
+    }
+}
+```
+
+#### Ipad 具体类
+
+```java
+class IPad extends AbstractComputer{
+
+    private boolean flag = true;
+    @Override
+    public void mainBoard() {
+        System.out.println("IPad启动主板");
+    }
+
+    @Override
+    public void cpu() {
+        System.out.println("IPad开始为CPU供电");
+    }
+
+    @Override
+    public void hardDisk() {
+        System.out.println("IPad开始为硬盘供电");
+    }
+
+    @Override
+    public void display() {
+        System.out.println("IPad屏幕点亮！");
+    }
+
+    @Override
+    public boolean isDisplay(){
+        return this.flag;
+    }
+    /**
+     * 用户自定义是否点亮屏幕
+     */
+    public void setDisplay(boolean userFlag){
+        if (!userFlag){
+            System.out.println("用户要求 iPad 屏幕不点亮");
+        }
+        this.flag = userFlag;
+    }
+}
+```
+
+#### 调用类
+
+```java
+public class TemplateMethodPattern {
+    public static void main(String[] args) {
+        MacBook macBook = new MacBook();
+        IPad iPad = new IPad();
+        macBook.startComputer();
+        System.out.println("-----------");
+        iPad.setDisplay(false);
+        iPad.startComputer();
+    }
+}
+```
+
+#### 输出
+
+```log
+开始供电
+MacBook启动主板
+MacBook开始为CPU供电
+MacBook开始为硬盘供电
+MacBook屏幕点亮
+-----------
+用户要求 iPad 屏幕不点亮
+开始供电
+IPad启动主板
+IPad开始为CPU供电
+IPad开始为硬盘供电
+```
+
+## 总结
+
+模板方法在一些开源框架中经常使用，他们通常用来进行功能拓展和定制化，通过继承一个抽象类，然后重写指定方法即可。在进行一些老旧代码重构时也可以考虑使用模板方法，抽出公共方法到父类，主要固定逻辑都交由父类，方便日后进行功能拓展，以及精简代码量。
+
+## 参考
+
+> 设计模式
+> 设计模式之禅

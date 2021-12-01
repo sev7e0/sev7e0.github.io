@@ -1,0 +1,218 @@
+---
+title: 装饰器-DecoratorPattern
+date: 2020-02-19 23:33:57
+tags:
+- 设计模式
+---
+
+
+## 定义
+
+Attach additional responsibilities to an object dynamically keeping the same interface.Decorators provide a flexible alternative to subclassing for extending functionality.（动态地给一个对象添加一些额外的职责。就增加功能来说，装饰模式相比生成子类更为灵活。）
+
+<!-- more -->
+
+> 对象结构型模式
+
+装饰模式以对客户透明的方式动态地给一个对象附加上更多的责任，换言之，客户端并不会觉得对象在装饰前和装饰后有什么不同。装饰模式可以在不需要创造更多子类的情况下，将对象的功能加以扩展。
+
+## 角色
+
+#### Component: 抽象构件
+
+最原始的接口或抽象类，最核心的对象
+
+#### ConcreteComponent: 具体构件
+
+抽象构件的具体实现，内部实现了一写功能，被修饰的类就是这个。
+
+#### Decorator: 抽象装饰类
+
+抽象装饰类，内部持有一个 Component。
+
+#### ConcreteDecorator: 具体装饰类
+
+抽象装饰类的具体实现，通过覆写父类的方法定义新的功能，一般都会调用抽象类内部`具体构件`的方法上进行新功能的编排。
+
+## 类图
+
+![2WELOI6JGfoDHdM](https://i.loli.net/2020/02/19/2WELOI6JGfoDHdM.png)
+
+## 使用场景
+
+- 需要扩展一个类的功能，或给一个类增加附加功能，并且要求不能修改原有的类或者不能被继承的类。
+
+- 需要动态地给一个对象增加功能，这些功能可以再动态地撤销。
+
+- 需要为一批的兄弟类进行改装或加装功能，当然是首选装饰模式。
+
+## 优点
+
+- 装饰类和被装饰类互相解耦，也就是说装饰类不需要知道具体构建有什么功能，被装饰类也不需要知道有哪个装饰类存在
+- 装饰模式可以作为继承关系的替代方案，而且解耦程度更高，并且无论装饰多少层最后返回的都是 Component。
+- 在不修改原类的情况下，装饰模式可以动态拓展类的功能。
+- 具体构件类与具体装饰类可以独立变化，用户可以根据需要增加新的具体构件类和具体装饰类，在使用时再对其进行组合，原有代码无须改变，符合“开闭原则”。
+
+## 缺点
+
+- 装饰器模式主要缺点还是在于一个类若被多层装饰，那么这个功能的复杂度和后期维护难度都会很大，在出现问题时需要一层一层的查找。所以建议每个构件最多一层装饰器。
+- 使用装饰模式进行系统设计时将产生很多小对象，这些对象的区别在于它们之间相互连接的方式有所不同，而不是它们的类或者属性值有所不同，同时还将产生很多具体装饰类。这些装饰类和小对象的产生将增加系统的复杂度，加大学习与理解的难度。
+
+## 注意事项
+
+
+
+## 具体实现
+
+以生产 Iphone 为例子，需要生产电池、屏幕、充电器，最后组装 iPhone ，具体构件以 iPhone 生产大厂富士康为例。
+
+#### Component抽象构件
+定义接口生产电池和屏幕。
+
+```java
+interface ProductionIPhone{
+
+    void productionBattery();
+
+    void productionScreen();
+
+}
+```
+
+#### 具体构件
+
+具体交给富士康生产电池和屏幕。
+
+```java
+class FuShiKang implements ProductionIPhone{
+
+    @Override
+    public void productionBattery() {
+        System.out.println("FuShiKang production the iphone battery");
+    }
+
+    @Override
+    public void productionScreen() {
+        System.out.println("FuShiKang production the iphone screen");
+    }
+}
+```
+#### 抽象装饰类
+
+定义一个富士康的抽象装饰类，以便日后拓展生产其他 iPhone 需要的硬件。
+
+```java
+abstract class FuShiKangDecorator implements ProductionIPhone{
+
+    private ProductionIPhone productionIPhone;
+
+    public FuShiKangDecorator(ProductionIPhone productionIPhone) {
+        this.productionIPhone = productionIPhone;
+    }
+
+    @Override
+    public void productionBattery() {
+        productionIPhone.productionBattery();
+    }
+
+    @Override
+    public void productionScreen() {
+        productionIPhone.productionScreen();
+    }
+}
+```
+
+#### 具体装饰类1、2
+
+```java
+//第一个具体装饰类我们让富士康在生产电池和屏幕外在拓展生产充电器
+class Decorator01 extends FuShiKangDecorator{
+
+    public Decorator01(ProductionIPhone productionIPhone) {
+        super(productionIPhone);
+    }
+		//生产充电器
+    public void productionCharger(){
+        System.out.println("FuShiKang production the iphone Charger too");
+    }
+
+
+    @Override
+    public void productionBattery() {
+        /**
+         * Decorator抽象类的子类（具体装饰者），里面都有一个构造方法调用super,这一句就体现了抽象类依赖于子类实现即抽象依赖于实现的原则
+         */
+        super.productionBattery();
+				//把充电器放在电池后生产
+        productionCharger();
+    }
+
+    @Override
+    public void productionScreen() {
+        super.productionScreen();
+    }
+}
+//第二个具体装饰类，这时候我们要求富士康可以组装 iPhone
+class Decorator02 extends FuShiKangDecorator{
+
+    public Decorator02(ProductionIPhone productionIPhone) {
+        super(productionIPhone);
+    }
+		//拓展组装 iPhone 的功能
+    public void assembleIPhone(){
+        System.out.println("Started assemble iphone");
+    }
+
+
+    @Override
+    public void productionBattery() {
+        super.productionBattery();
+    }
+
+    @Override
+    public void productionScreen() {
+        super.productionScreen();
+				//在生产完屏幕后，开始组装 iPhone
+        assembleIPhone();
+    }
+}
+```
+#### 调用
+
+```java
+public class DecoratorPattern {
+
+    public static void main(String[] args) {
+        ProductionIPhone productionIPhone = new FuShiKang();
+				//第一层装饰，装饰完后可以生产充电器
+				ProductionIPhone decorator1 = new Decorator01(productionIPhone)
+				//第二层装饰，装饰完后富士康已经可以组装 iPhone 了
+        ProductionIPhone decorator = new Decorator02(decorator1);
+        decorator.productionBattery();
+        decorator.productionScreen();
+    }
+}
+```
+
+#### 输出
+
+```log
+FuShiKang production the iphone battery
+FuShiKang production the iphone Charger too
+FuShiKang production the iphone screen
+Started assemble iphone
+```
+
+## 总结
+
+- 装饰模式用于动态地给一个对象增加一些额外的职责，就增加对象功能来说，装饰模式比生成子类实现更为灵活。可以通过一种动态的方式来扩展一个对象的功能，并通过使用不同的具体装饰类以及这些装饰类的排列组合，可以创造出很多不同行为的组合，而且具体构件类与具体装饰类可 以独立变化，用户可以根据需要增加新的具体构件类和具体装饰类；
+- 其主要缺点在于使用装饰模式进行系统设计时将产生很多小对象，而且装饰模式比继承更加易于出错，排错也很困难，对于多次装饰的对象，调试时寻找错误可能需要逐级排查，较为烦琐。
+- 装饰模式可分为透明装饰模式和半透明装饰模式：
+	- 在透明装饰模式中，要求客户端完全针对抽象编程，装饰模式的透明性要求客户端程序不应该声明具体构件类型和具体装饰类型，而应该全部声明为抽象构件类型；
+	- 半透明装饰模式允 许用户在客户端声明具体装饰者类型的对象，调用在具体装饰者中新增的方法。
+
+## 参考
+
+> 设计模式
+> 设计模式之禅
+> [3. 装饰模式 — Graphic Design Patterns](https://design-patterns.readthedocs.io/zh_CN/latest/structural_patterns/decorator.html)

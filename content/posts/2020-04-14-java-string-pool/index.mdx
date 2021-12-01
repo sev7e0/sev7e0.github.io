@@ -1,0 +1,150 @@
+---
+title: Java：字符串指南-译
+date: 2020-04-14 22:34:23
+tags: 
+- java
+---
+
+## 1. 概述
+
+String对象在Java语言中是最常用的类型。
+
+在本篇文章中，我们将探索Java字符串池——JVM存储字符串的特殊内存区域。
+
+## 2. String Interning
+
+由于Java中字符串的不变性，JVM可以通过在池中只存储每个文本字符串的一个副本来优化为它们分配的内存量。这个处理被称作`Interning`。
+
+当我们创建一个String变量并且赋值给它时，JVM会在常量池中进行搜索相同的值，**如果找到，Java编译器会简单的返回一个内存地址引用，不会分配额外的内存。**
+
+如果没有找到，将会把这个变量添加到pool中，并返回内存地址引用。
+
+让我们写一个小测试验证一下：
+
+```java
+String constantString1 = "Baeldung";
+String constantString2 = "Baeldung";
+
+assertThat(constantString1)
+  .isSameAs(constantString2);
+```
+
+## 3. 使用构造函数创建的字符串
+
+当使用`new`操作创建字符串时，Java编译器会创建一个新对象，并将其存储在JVM保留的堆内存空间中。
+
+这样创建的每一个字符串对象都将指向具有自己地址的不同内存区域。
+
+让我们看一下这个与之前的案例有什么不同：
+
+```java
+String constantString = "Baeldung";
+String newString = new String("Baeldung");
+assertThat(constantString).isNotSameAs(newString);
+```
+
+## 4. 字符串文本与字符串对象
+
+**当我们使用`new`操作创建一个字符串对象时，他总是在堆内存中进行创建。另一方面，如果我们是用字符串文本创建对象时，例如“Baeldung”，它可以从字符串池返回现有对象（如果它已经存在）**,除此之外，她将会创建一个新的String对象，并放到字符串池中，已备将来再次使用。
+
+从较高层面看，两者都是字符串对象，主要的不同点主要来自于`new`操作符总是创建一个新的String对象，另外，当我们使用literal创建一个字符串时，它是临时的。
+
+当我们对使用两种不同方式创建的对象进行比较时，这将更加明显：
+
+```java
+String first = "Baeldung"; 
+String second = "Baeldung"; 
+System.out.println(first == second); // True
+```
+
+在这个例子中，字符床对象将会有两个相同的引用。
+
+接下来，让我们使用`new`创建两个不同的对象，然后检查是否有两个不同的引用。
+
+```java
+String third = new String("Baeldung");
+String fourth = new String("Baeldung"); 
+System.out.println(third == fourth); // False
+```
+
+同样，当我们对一个使用`new`创建的字符串对象和一个字符串文本使用==操作符进行比较时，将会返回`false`：
+
+```java
+String fifth = "Baeldung";
+String sixth = new String("Baeldung");
+System.out.println(fifth == sixth); // False
+```
+
+一般来说，**我们应该尽可能使用字符串文字表示法**。它更容易阅读，并且给编译器一个优化代码的机会。
+
+## 5. 手动Interning
+
+如果我们相对一个字符串对象进行intern，我们可以通过调用`intern()`方法进行手动intern。手动的Interning将会把字符串的引用保存到字符串池中，并且JVM将会在我们需要时返回引用地址。
+
+让我为此创建一个测试用例：
+
+```java
+String constantString = "interned Baeldung";
+String newString = new String("interned Baeldung");
+ 
+assertThat(constantString).isNotSameAs(newString);
+ 
+String internedString = newString.intern();
+ 
+assertThat(constantString)
+  .isSameAs(internedString);
+```
+
+## 6. 垃圾回收
+
+在Java 7之前，JVM将字符串池以固定大小保存在永久代区域，这也就意味着他不能够在运行时进行修改，也不能够进行垃圾回收。
+
+将字符串保存到永久代（而不是保存到堆），如果我们intern太多的字符串，JVM将会发生OOM的异常。
+
+从Java 7起，Java字符串池被保存在堆内存中，也就意味着JVM可以对其进行垃圾回收。该种方式将会减少发生OOM的风险，因为未被引用的字符串将会从池中移出，从而释放内存。
+
+
+## 7. 性能与优化
+
+在Java6中，我们可以执行的唯一优化是在使用MaxPermSize JVM选项调用程序期间增加PermGen空间：
+
+```
+-XX:MaxPermSize=1G
+```
+
+在Java 7中，我们有更详细的选项来检查和扩展/减少池大小。让我们看看查看池大小的两个选项：
+
+
+```
+-XX:+PrintFlagsFinal
+```
+
+```
+-XX:+PrintStringTableStatistics
+```
+
+如果我们想增加bucket的池大小，可以使用StringTableSize JVM选项：
+
+```
+-XX:StringTableSize=4901
+```
+
+在Java 7u40之前，默认的池的大小为1009个buckets，但是在最近的Java版本中有一些改变，准确地说，从Java 7u40到Java 11的默认池大小是60013，现在增加到65536。
+
+需要注意的是，增加池的大小将会消耗更多的内存，但会减少字符串插入表的时间（译：更明显的数据对比参看[Java Performance Tuning Guide](http://java-performance.info/string-intern-in-java-6-7-8/)）
+
+## 8. 关于Java 9
+
+在Java 8之前，字符串在内部被表示为一个字符数组`char[]`，用UTF-16编码，因此每个字符使用两个字节的内存。
+
+在Java 9中其被表示为一种新的结构，称作压缩字符串。新格式将会根据存储内容在`char[]`和`byte[]`两种之间进行选择。
+
+由于新的字符串表示将仅在必要时使用UTF-16编码，因此堆内存量将显著减少，从而减少JVM上的垃圾收集器开销。
+
+## 9. Conclusion
+
+通过本篇文章，我们展示了JVM和Java编译器如何通过Java字符串池优化字符串对象的内存分配。
+
+本文章中所有的代码案例都可以在[GitHub](https://github.com/eugenp/tutorials/tree/master/core-java-modules/core-java-strings)中找到。
+
+> 原文链接：[https://www.baeldung.com/java-string-pool](https://www.baeldung.com/java-string-pool)

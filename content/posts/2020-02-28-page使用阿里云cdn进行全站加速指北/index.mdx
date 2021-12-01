@@ -1,0 +1,99 @@
+---
+title: 博客使用阿里云cdn进行全站加速指北
+date: 2020-02-28 12:42:52
+tags: 
+    - blog
+---
+
+主要记录如何使用付费的阿里云cdn进行github page全站加速。（前提条件已经存在github pages和私人域名）
+
+> 主要流程：
+    
+    1. 购买阿里云服务
+    2. 配置域名
+    3. 配置阿里云全站加速
+    4. github pages开启https
+
+针对全站加速，需要在阿里云购买`下行流量包`和`https访问次数`(https访问次数是支持网站支持https访问的付费服务，默认不支持)
+
+![MyH2rSP5KVZdOsL](https://i.loli.net/2020/02/28/MyH2rSP5KVZdOsL.png)
+
+## 添加全站加速域名
+
+在阿里云控制台选择`全站加速`服务，并添加域名进行管理。
+
+![mHJf98jliKGZuOR](https://i.loli.net/2020/02/28/mHJf98jliKGZuOR.png)
+
+1. 加速域名：也就是你的私人域名（www.sev7e0.site）
+2. 业务类型：动态加速
+3. 源站信息：
+    - 类型：这里可以选择源站域名也就是（sev7e0.github.io）或者通过源站域名找到对应的真是ip地址。
+    - 端口：这里需要看你的github page中setting是够开启了`Enforce HTTPS`，如未开启这选择80，开启了选择443。
+    - 加速区域：中国大陆
+
+添加成功后阿里云将会分配一个CNAME，将在下一步中使用到。
+
+![PMZkzypHoGNTCbK](https://i.loli.net/2020/02/28/PMZkzypHoGNTCbK.png)
+
+## 在域名管理中配置CNAME
+
+在阿里云控制台选择`域名`服务，并进入解析管理。
+
+![Or1WiBg5EG6LMfu](https://i.loli.net/2020/02/28/Or1WiBg5EG6LMfu.png)
+
+![PZBtQchU2TxmSNv](https://i.loli.net/2020/02/28/PZBtQchU2TxmSNv.jpg)
+
+添加CNAME，记录值使用上一步中阿里云提供的CNAME。
+
+此时关于阿里云的相关配置完成一部分。
+
+## 进行github配置
+
+在github -> setting -> GitHub Pages页面，我这里使用了https方式访问，也就是需要开启`Enforce HTTPS`选项。
+
+开启原则：
+
+https://help.github.com/en/articles/securing-your-github-pages-site-with-https
+https://help.github.com/en/articles/setting-up-an-apex-domain
+
+1. 添加 A 记录，至少有一条 A 指向以下 ip 地址。参考`在域名管理中配置CNAME`
+
+```txt
+185.199.108.153
+185.199.109.153
+185.199.110.153
+185.199.111.153
+```
+
+并将`Custom domain`清空。此时已经看到`Enforce HTTPS`选项已经开启。
+
+![OGVb9THX2MumkI6](https://i.loli.net/2020/02/28/OGVb9THX2MumkI6.jpg)
+
+至此你的github pages已经可以通过阿里云cdn进行全站加速了。
+
+## 常见问题
+
+### 通过CDN访问源站提示重定向的次数过多
+
+源站（就是你的github pages）配置了CDN或者全站加速后，使用浏览器进行访问，出现如下错误提示：
+
+```txt
+XXX.XXX.XXX 将您重定向的次数过多。
+尝试清除 Cookie.
+ERR_TOO_MANY_REDIRECTS
+```
+
+该问题是由于你的github pages没有开启https，但是你的阿里云全站加速中的回源配置中使用了https那么将会导致反复的重定向问题。
+同样，相反的逻辑也会产生这个问题。因为阿里云cdn在缓存中找不到资源时，会去请求你的源网站资源，这样的请求就叫`回源请求`.
+
+解决方案：[通过CDN访问源站提示重定向的次数过多](https://help.aliyun.com/knowledge_detail/148179.html?spm=5176.13910061.0.0.18f9237a280JMV&aly_as=xYRT4Elo)
+
+简单来说，就是在配置回源的请求方式和你的github配置一样，github pages只支持https那么就用https 443进行回源。不支持就用http 80进行回源。
+
+暂时想到这么多，后续问题再更新。
+
+## 参考
+
+> [github pages 开启 https 及配置 www](https://www.jianshu.com/p/1645be9307a1)
+> [通过CDN访问源站提示重定向的次数过多](https://help.aliyun.com/knowledge_detail/148179.html?spm=5176.13910061.0.0.18f9237a280JMV&aly_as=xYRT4Elo)
+> [【CDN访问异常】使用CDN访问出现403错误](https://developer.aliyun.com/article/744612)

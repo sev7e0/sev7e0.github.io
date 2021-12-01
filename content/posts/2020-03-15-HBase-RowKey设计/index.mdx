@@ -1,0 +1,218 @@
+---
+title: 知识总结：HBase-RowKey设计
+date: 2020-03-15 15:52:35
+tags: 
+- hbase
+---
+
+## 序
+
+该篇文章主要记录遇到hbase热点相关问题，以及RowKey设计和预分区相关总结。
+
+## 热点原因
+
+- 我们知道HBase一张表由多个分布在RegionServer上的Region构成，也就形成多个分区的概念，而默认情况下HBase创建表只会创建一个region，写入的数据都会写入到这一个region上，只有当数据量超过了配置的大小时，region才会拆分成为两个region来进行存储，这就回产生region的热点问题（这时就需要采用hbase提供的预分区策略）。
+- HBase中的每一行数据都是根据RowKey的字典序进行存储，**尽管我们才用了预分区策略**，但是如果我们的RowKey没有进行处理，那么可能存在同时发送大量RowKey相近的数据，这就会都同时写入一个region，也会造成region的热点问题。
+
+## 解决热点
+
+### rowkey设计
+
+第二个原因中所带来问题的解决办法就是设计一个合理的rowkey，尽可能的将所有的数据散列到不同的分区，那么如何设计rowkey？
+
+### rowkey不参与查询
+
+当前认为rowkey不用来查询，也就是不需要存储相关的数据信息，只需要保证唯一性就可以了。关于使用rowkey来查询稍后在记录。
+
+### 散列Hash
+
+第一想法就是采用hash的方式来保证唯一性，例如我们采用两个字段来保证唯一性。
+
+```
+结构：user_id + user_name + timestamp
+hash前：1234sev7e01584252500
+hash后：591be696051b9bae8324eeda0ab43676
+```
+
+这里将拼接后的hash值作为rowkey，才用的MD5进行hsah，同样还可以采用其他的方式，sha1、sha256或sha512等算法。
+
+##### 优缺点
+
+这里使用hash能够满足将hash进行散列，打散数据集，但也存在问题就是hash后的长度过长，并不能满足rowkey尽可能的设计的短的要求。
+
+> **rowkey设计要求**：RowKey 可以是任意的字符串，最大长度64KB（因为 Rowlength 占2字节）。建议越短越好，原因如下：
+  - 数据的持久化文件HFile中是按照KeyValue存储的，如果rowkey过长，比如超过100字节，1000w行数据，光rowkey就要占用100*1000w=10亿个字节，将近1G数据，这样会极大影响HFile的存储效率；
+  - MemStore将缓存部分数据到内存，如果rowkey字段过长，内存的有效利用率就会降低，系统不能缓存更多的数据，这样会降低检索效率；
+  - 目前操作系统都是64位系统，内存8字节对齐，控制在16个字节，8字节的整数倍利用了操作系统的最佳特性。
+
+### 反转Reversing
+
+Reversing 的原理是反转一段固定长度或者全部的键。
+
+```
+flink.iteblog.com                           moc.golbeti.knilf
+www.iteblog.com          ===>               moc.golbeti.www
+carbondata.iteblog.com                      moc.golbeti.atadnobrac
+```
+这些 URL 其实属于同一个域名，但是由于前面不一样，导致数据不在一起存放。我们可以对其进行反转,如上,经过这个之后，前缀就相同了,这些 URL 的数据就可以放一起了。
+
+##### 优缺点
+
+有效的打乱了行键,但是却牺牲了行排序的属性.
+
+### 加盐Salting
+
+Salting的具体做法就是给原有的rowkey添加一个随机前缀，使得他与前边的rowkey排序时保持不同，这样在落入region时能够保证每一个region的均分数据。
+
+
+```
+下边有两个rowkey
+hash后：591be696051b9bae8324eeda0ab43676
+hash后：e696ae83b43051b9b591b67624eeda0a
+
+加盐后：0001591be696051b9bae
+加盐后：0002ae83b43051b9b591
+```
+
+以前一个hash值为例。为了满足rowkey尽可能短的以及16字节最优原则，我们截取hash值并给前边加一个后缀，这样就完成了一个salting操作。
+
+为何要加0001、0002这类数字？这样做是为了后边我们在预分区时能够合理的设计预分区个数，和根据rowkey划分region。
+
+##### 优缺点
+
+salting后可以针对不同的region范围给定随机的前四位，保证数据均匀落入region，这能能够明显提高hbase写入的效率。不过前提是我们不需要rowkey参与查询，如果要更根据rowkey进行查找例如scan时，那么需要做更多的操作。
+
+不过该种方式也是更多的被使用的。因为很多时候我们不需要根据rowkey进行查询，比如可以根据二级索引来进行检索，同时也有很多工具可以参考使用，例如`Phoenix`和`ElasticSearch`等。
+
+```
+SQL+OLTP ==> Phonenix
+全文检索+二级索引 ==> Solr/ES
+```
+
+### rowkey参与查询
+
+参考 [OpenTSDB 底层 HBase 的 Rowkey 是如何设计的](https://www.iteblog.com/archives/2450.html)
+
+### 预分区
+
+分析完rowkey的几种设计方案，接下来再回到第一个原因中提到解决默认一个region的办法就是预分区，也就是在创建表的根据数据量的大小预先设置好分区。这就涉及到如何设定一个合理的预分区个数，和根据rowkey划分region。
+
+### 分区条件
+
+**如何设计一个分区让所有的数据能够均匀分布？**
+
+例如我们打算针对`table01`给其设计6个region，给每一个region一个独立的编号。
+![uTaP7iOSwzkD6KL](https://i.loli.net/2020/03/15/uTaP7iOSwzkD6KL.png)
+
+在数据写入时，我们知道hbase是根据rowkey的字典序进行排序的，也就说在每一个region内部其也是有序的，会根据不同region的边界（start rowkey -> end rowkey）将数据写入到对应的region上去，那么也就到了预分区最重要的一个步骤，如何合理均匀的划分region边界？
+
+这里记录一个通用且有用的分区策略：**将rowkey salting然后根据前边的随机数进行划分region。**
+
+如我们针对上边七个个region可以设计成：
+
+```
+~       0001|
+0001|   0002|
+0002|   0003|
+0003|   0004|
+0004|   0005|
+0005|   0006|
+~       0006|
+```
+
+为什么后面会跟着一个"|"，是因为在ASCII码中，"|"的值是124，大于所有的数字和字母等符号，当然也可以用“~”（ASCII-126）。分隔文件的第一行为第一个region的endkey，每行依次类推，最后一行不仅是倒数第二个region的endkey，同时也是最后一个region的startkey。也就是说分区文件中填的都是key取值范围的分隔点。
+
+这样每次生成rowkey时只需要在这六个数中随机选择一个将其拼接到hash值上，在写入时就会写入到我们规划的对应分区中去。
+
+```
+加盐后：0000591be696051b9bae ===》一号分区
+加盐后：0001ae83b43051b9b591 ===》二号分区
+加盐后：0002ae96051b51b96051 ===》三号分区
+```
+
+下边记录两种预分区的方式：
+
+### 第一种方式-命令行
+
+我们可以在本地指定一个文件split-file.txt
+```
+0001|
+0002|
+0003|
+0004|
+0005|
+0006|
+```
+
+创建表时：
+```shell
+hbase(main):008:0> create 'split-table','f1',{SPLITS_FILE => '/home/hadoopadmin/split-file.txt'}
+0 row(s) in 5.1390 seconds
+
+=> Hbase::Table - split-table
+hbase(main):009:0>
+```
+
+创建完成后可以在页面查看到：
+
+![COg5pbcx31dqIh2](https://i.loli.net/2020/03/15/COg5pbcx31dqIh2.png)
+
+### 第二种方式-java代码
+
+创建预分区：
+
+```java
+public static void doPreRegion(Connection connection, HashMap<String,String> tableName, Integer regionNum,
+                                Boolean dropExistTable) throws IOException {
+    Admin admin = connection.getAdmin();
+    //支持同时创建多个table
+    for (Map.Entry<String,String> entry : tableName.entrySet()){
+        TableName name = TableName.valueOf(entry.getKey());
+        HTableDescriptor hTableDescriptor = new HTableDescriptor(name);
+        HColumnDescriptor hColumnDescriptor = new HColumnDescriptor(entry.getValue());
+        hTableDescriptor.addFamily(hColumnDescriptor);
+        byte[][] bytes = new byte[regionNum][];
+        //生成每一个region的边界值 0000|  0001| 0002|。。。
+        for (int i = 0; i < regionNum; i++) {
+            String leftPad = StringUtils.leftPad(i + "", 4, "0");
+            bytes[i] = Bytes.toBytes(leftPad+"|");
+        }
+        //当表名存在时可选是否drop原有的表
+        if (admin.tableExists(name)){
+            if (dropExistTable){
+                logger.info("table {} exist, will drop it.", name);
+                admin.disableTable(name);
+                admin.deleteTable(name);
+            }else {
+                logger.warn("table {} exist！", entry.getKey());
+                continue;
+            }
+
+        }
+        //指定分区创建table
+        admin.createTable(hTableDescriptor, bytes);
+        logger.info("created hbase table {} completed!, with columnFamily {} and {} regions.", name,
+            entry.getValue(), regionNum);
+    }
+    admin.close();
+}
+```
+
+执行成功后就能够看到创建好的七个预分区。如上图。
+
+获取rowkey：
+
+```scala
+  def getRowKey(str:String,numRegion:Int):String ={
+    val result: Int = (str.hashCode & Integer.MAX_VALUE) % numRegion
+    val prefix:String = StringUtils.leftPad(result+"",4,"0");
+    val suffix: String = DigestUtils.md5Hex(str).substring(0,12)
+    prefix + suffix
+  }
+```
+
+## 总结
+
+本篇总结记录了在防止hbase产生热点问题时的解决方案，主要从两个方面进行分析，一设计合理的rowkey，将数据集进行合理的散列。二设计合理的预分区，将散列后的数据集均匀的插入到region中，以防止hbase产生数据倾斜等热点问题。后续遇到更好的设计方案再及时更新。
+
+over~
